@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  </head>
+  <body></body>
+
+  <script>
+    // Conecte ao seu servidor (ajuste URL/porta/domínio/SSL)
+    const socket = io("localhost:8080", {
+      transports: ["websocket"],
+    });
+
+    // Pedir um símbolo
+    function startSymbol(symbol) {
+      socket.emit("watch", symbol); // ex: 'EUR/USD' ou 'BTC/USD'
+    }
+
+    // Parar um símbolo
+    function stopSymbol(symbol) {
+      socket.emit("unwatch", symbol);
+    }
+
+    // Receber ticks
+    socket.on("tick", ({ symbol, payload }) => {
+      // Atualize seu gráfico/TradingView com os dados do 'payload'
+      // payload costuma conter preço/ts. Adapte o parser ao seu datasource.
+      console.log("Tick:", symbol, payload);
+    });
+
+    // Exemplo:
+    startSymbol("EUR/USD");
+    startSymbol("bnbusdt");
+    // depois...
+    // stopSymbol('EUR/USD');
+  </script>
+</html>
