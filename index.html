@@ -16,13 +16,13 @@
       });
 
     // Pedir um símbolo
-    function startSymbol(symbol) {
-      socket.emit("watch", symbol); // ex: 'EUR/USD' ou 'BTC/USD'
+    function startSymbol(symbol, interval) {
+      socket.emit("watch", { symbol: symbol, interval: interval }); // ex: 'EUR/USD' ou 'BTC/USD'
     }
 
     // Parar um símbolo
-    function stopSymbol(symbol) {
-      socket.emit("unwatch", symbol);
+    function stopSymbol(symbol, interval) {
+      socket.emit("unwatch", { symbol: symbol, interval: interval });
     }
 
     // Receber ticks
@@ -34,7 +34,9 @@
 
     // Exemplo:
     startSymbol("EUR/USD");
-    startSymbol("bnbusdt");
+    startSymbol("bnbusdt", "1m");
+    startSymbol("btcusdt", "1m");
+    startSymbol("ethusdt", "1m");
     // depois...
     // stopSymbol('EUR/USD');
   </script>
