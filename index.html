@@ -10,9 +10,10 @@
 
   <script>
     // Conecte ao seu servidor (ajuste URL/porta/domínio/SSL)
-    const socket = io("localhost:8080", {
-      transports: ["websocket"],
-    });
+    const socket = //io("31.97.172.233:5555", {
+      io("localhost:8080", {
+        transports: ["websocket"],
+      });
 
     // Pedir um símbolo
     function startSymbol(symbol) {

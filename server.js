@@ -172,8 +172,10 @@ function createBSocket() {
 
     console.log(`${symbol}: ${payload.close}`);
 
-    const subs = symbolSubscribers.get(symbol);
-    if (!subs || subs.size === 0) return;
+    const subs = symbolSubscribers.get(symbol.toLowerCase());
+    console.log(`symbolSubscribers no binance: ${subs}`);
+
+    if (!subs) return;
 
     // Enviar para todos os clientes inscritos nesse stream
     for (const socketId of subs) {
@@ -222,6 +224,7 @@ function subscribeSymbol(symbol, socketId) {
     if (!isCrypto) socketSend(twSocket, TD_SUB_MSG(symbol));
     else socketSend(bSocket, B_SUB_MSG(symbol + "@kline_1m", socketId));
   }
+  set.add(socketId);
 }
 
 function unsubscribeSymbol(symbol, socketId) {
@@ -249,6 +252,8 @@ io.on("connection", (socket) => {
     // Adiciona cliente na lista do símbolo
     const subs = symbolSubscribers.get(symbol) || new Set();
     subs.add(socket.id);
+
+    console.log(`symbolSubscribers no watch: ${symbolSubscribers}`);
 
     // Se foi o primeiro do símbolo, assina no twSocket
     if (subs.size === 1) subscribeSymbol(symbol, socket.id);
