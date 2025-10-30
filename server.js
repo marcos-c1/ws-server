@@ -2,7 +2,6 @@ const express = require("express");
 const http = require("http");
 const { WebSocket } = require("ws");
 const { Server } = require("socket.io");
-const { normalize } = require("path");
 require("dotenv").config();
 
 const API_KEY = process.env.TWELVE_DATA_KEY;
@@ -11,11 +10,30 @@ const LIMIT_RETRIES = 5;
 const WSS_TW_URL = `wss://ws.twelvedata.com/v1/quotes/price?apikey=${API_KEY}`;
 const WSS_BINANCE_URL = `wss://fstream.binance.com/ws`;
 
+// Função helper para identificar símbolos Forex
+function isForexSymbol(symbol) {
+  const forexSymbols = ["EUR", "GBP", "AUD", "NZD", "USD", "CAD", "CHF", "JPY"];
+  const parts = symbol.split("/");
+  if (parts.length === 2) {
+    return forexSymbols.includes(parts[0]) && forexSymbols.includes(parts[1]);
+  }
+  // Checa se é um par de 6 caracteres com duas moedas forex
+  if (symbol.length === 6) {
+    const base = symbol.substring(0, 3);
+    const quote = symbol.substring(3, 6);
+    return forexSymbols.includes(base) && forexSymbols.includes(quote);
+  }
+  return false;
+}
+
 // Subscribe to bnbusdt@kline_1m
 
 // Exemplos genéricos (ajuste os campos para o payload que sua instância exige)
 const TD_SUB_MSG = (symbol) =>
-  JSON.stringify({ action: "subscribe", params: { symbols: [symbol] } });
+  JSON.stringify({
+    action: "subscribe",
+    params: { symbols: [{ symbol: symbol, exchange: "Forex" }] },
+  });
 
 const B_SUB_MSG = (symbol, socketId) =>
   JSON.stringify({ method: "SUBSCRIBE", params: [symbol], id: socketId });
@@ -33,7 +51,11 @@ const B_UNSUB_MSG = (symbol, socketId) =>
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
+const io = new Server(server, {
+  cors: {
+    origin: "*"
+  }
+});
 const currentDay = new Date().getDay();
 
 /** Estado do twSocket (Twelve Data) */
@@ -59,21 +81,78 @@ function socketSend(socket, msg) {
 
 function reconnectTW() {
   if (retryTWCount < LIMIT_RETRIES && !twSocketReady) {
+    console.log(
+      `🔄 Tentando reconectar TwelveData (tentativa ${retryTWCount + 1}/${LIMIT_RETRIES})`,
+    );
     retryTWCount++;
     setTimeout(() => {
       createTWSocket();
+
+      // Re-subscreve todos os símbolos Forex ativos
+      for (const [symbol, subscribers] of symbolSubscribers.entries()) {
+        if (subscribers.size > 0 && isForexSymbol(symbol)) {
+          console.log(
+            `🔄 Resubscrevendo símbolo Forex após reconexão:`,
+            symbol,
+          );
+          socketSend(twSocket, TD_SUB_MSG(symbol));
+        }
+      }
+
       reconnectTW();
     }, 2000);
   }
 }
 
 function reconnectBinance() {
-  if (retryBCount < LIMIT_RETRIES && !bSocketReady) {
+  const maxRetries = LIMIT_RETRIES;
+  const backoffDelay = Math.min(1000 * Math.pow(2, retryBCount), 30000); // Exponential backoff, max 30s
+
+  if (retryBCount < maxRetries && !bSocketReady) {
+    console.log(
+      `🔄 Reconectando Binance (tentativa ${retryBCount + 1}/${maxRetries}, delay: ${backoffDelay}ms)`,
+    );
     retryBCount++;
+
     setTimeout(() => {
+      // Se já reconectou, não tenta de novo
+      if (bSocketReady) {
+        console.log("✅ Binance já está conectado, ignorando retry");
+        return;
+      }
+
+      console.log("🔌 Criando nova conexão Binance...");
       createBSocket();
-      reconnectBinance();
-    }, 2000);
+
+      // Agenda resubscrições após dar tempo para conectar
+      setTimeout(() => {
+        if (!bSocketReady) {
+          console.log("❌ Socket ainda não está pronto, retry será agendado");
+          return;
+        }
+
+        // Re-subscreve todos os símbolos Binance ativos
+        console.log("📝 Verificando subscrições ativas para resubscrever...");
+        let resubCount = 0;
+
+        for (const [symbol, subscribers] of symbolSubscribers.entries()) {
+          if (subscribers.size > 0 && !isForexSymbol(symbol)) {
+            const streamName = `${symbol.toLowerCase()}@kline_1m`;
+            console.log(
+              `� Resubscrevendo ${streamName} (${subscribers.size} subscribers)`,
+            );
+            socketSend(bSocket, B_SUB_MSG(streamName, 1));
+            resubCount++;
+          }
+        }
+
+        console.log(
+          `✅ Processo de reconexão completo, ${resubCount} símbolos resubscritos`,
+        );
+      }, 1000); // Espera 1s após criar socket para resubscrever
+
+      reconnectBinance(); // Agenda próxima tentativa se necessário
+    }, backoffDelay);
   }
 }
 
@@ -83,19 +162,17 @@ function createTWSocket() {
 
   twSocket.on("open", () => {
     twSocketReady = true;
-    console.log("WS Twelve Data conectado");
+    console.log("🔗 WS Twelve Data conectado");
     // Drena mensagens pendentes
     while (pendingQueue.length) socketSend(twSocket, pendingQueue.shift());
 
-    // // Heartbeat simples (ajuste intervalo conforme doc)
-    // clearInterval(heartbeatTimer);
-    // heartbeatTimer = setInterval(() => {
-    //   try {
-    //     if (twSocket?.readyState === WebSocket.OPEN) {
-    //       twSocket.ping?.(); // alguns servidores respondem com pong
-    //     }
-    //   } catch (_) {}
-    // }, 15000);
+    // Configurar heartbeat para manter conexão viva
+    this.heartbeatInterval = setInterval(() => {
+      if (twSocket.readyState === WebSocket.OPEN) {
+        console.log("💓 Enviando heartbeat TwelveData");
+        twSocket.send(JSON.stringify({ action: "heartbeat" }));
+      }
+    }, 30000); // Heartbeat a cada 30 segundos
   });
 
   twSocket.on("message", (data) => {
@@ -112,7 +189,6 @@ function createTWSocket() {
     // msg = { symbol: 'EUR/USD', price: 1.08123, ts: 1710001112, ... }
     // ou msg.data = [{symbol:'EUR/USD', price: ...}, ...]
     const items = Array.isArray(msg?.data) ? msg.data : [msg];
-    console.log("Recebi atualizacao TW");
 
     for (const it of items) {
       const sym = it.symbol || it.s || it.ticker;
@@ -145,32 +221,74 @@ function createBSocket() {
   bSocketReady = false;
   bSocket = new WebSocket(WSS_BINANCE_URL);
 
+  let heartbeatTimeout;
+  let lastPongTime = Date.now();
+
   bSocket.on("open", () => {
     bSocketReady = true;
-    console.log("WS Binance conectado");
+    retryBCount = 0; // Reset contador de tentativas ao conectar com sucesso
+    console.log("🔗 WS Binance conectado");
 
-    // Heartbeat simples (ajuste intervalo conforme doc)
-    // clearInterval(heartbeatTimer);
-    // heartbeatTimer = setInterval(() => {
-    //   try {
-    //     if (bSocket?.readyState === WebSocket.OPEN) {
-    //       bSocket.ping?.(); // alguns servidores respondem com pong
-    //     }
-    //   } catch (_) {}
-    // }, 15000);
+    // Drena mensagens pendentes
+    while (pendingQueue.length) {
+      const msg = pendingQueue.shift();
+      console.log("📤 Enviando mensagem pendente:", msg);
+      socketSend(bSocket, msg);
+    }
+
+    // Sistema de heartbeat mais robusto para Binance
+    if (this.binanceHeartbeat) clearInterval(this.binanceHeartbeat);
+
+    this.binanceHeartbeat = setInterval(() => {
+      if (bSocket?.readyState === WebSocket.OPEN) {
+        // Envia ping para Binance
+        bSocket.send(JSON.stringify({ method: "ping" }));
+        console.log("💓 Ping enviado para Binance");
+
+        // Verifica se recebemos pong nos últimos 30 segundos
+        if (Date.now() - lastPongTime > 30000) {
+          console.warn(
+            "⚠️ Não recebeu pong da Binance por 30s, reconectando...",
+          );
+          bSocket.terminate(); // Força fechamento para reconectar
+          clearInterval(this.binanceHeartbeat);
+        }
+      }
+    }, 15000); // Ping a cada 15 segundos
+  });
+
+  bSocket.on("ping", (data) => {
+    console.log(`Recebi o ping da Binance: ${data}`);
+    if (bSocket && bSocket?.readyState === WebSocket.OPEN) {
+      bSocket.send(
+        JSON.stringify({
+          method: "PONG",
+        }),
+      );
+    }
   });
 
   bSocket.on("message", (data) => {
-    // Normalmente vem JSON por símbolo; encaminhe para os assinantes
-    // Adapte conforme o payload da Twelve Data
     let msg;
-
     try {
       msg = JSON.parse(data.toString());
-    } catch {
+    } catch (e) {
+      console.error("❌ Erro ao parsear mensagem da Binance:", e);
       return;
     }
-    if (msg.e !== "kline") return;
+
+    // Tratamento de pong
+    if (msg.result === null || msg.method === "pong") {
+      lastPongTime = Date.now();
+      console.log("🏓 Pong recebido da Binance");
+      return;
+    }
+
+    // Ignora mensagens que não são kline
+    if (msg.e !== "kline") {
+      if (msg.e) console.log("📨 Mensagem não-kline recebida:", msg.e);
+      return;
+    }
 
     const k = msg.k;
     const symbol = msg.s;
@@ -190,7 +308,7 @@ function createBSocket() {
     console.log(`${symbol}: ${payload.close}`);
 
     const subs = symbolSubscribers.get(symbol.toLowerCase());
-    console.log(`symbolSubscribers no binance: ${subs}`);
+    // console.log(`symbolSubscribers no binance: ${subs}`);
 
     if (!subs) return;
 
@@ -282,9 +400,18 @@ function normalizeInterval(interval) {
 
 /** Socket.io (clientes) */
 io.on("connection", (socket) => {
-  console.log("Client id " + socket.id + " conectado.");
-  clientSymbols.set(socket.id, new Set());
-  normalizeInterval;
+  const clientId = socket.id;
+  console.log("🔌 Cliente conectado:", clientId);
+
+  // Inicializa conjunto de símbolos do cliente
+  clientSymbols.set(clientId, new Set());
+
+  // Envia estado atual do servidor para o cliente
+  socket.emit("server:status", {
+    twReady: twSocketReady,
+    bReady: bSocketReady,
+  });
+
   // Cliente pede para assistir um símbolo
   socket.on("watch", (symbolWithInterval) => {
     // Normalize antes de receber o simbolo
@@ -330,17 +457,47 @@ io.on("connection", (socket) => {
     socket.emit("unwatch:ok", { symbol });
   });
 
-  // Cleanup ao desconectar
-  socket.on("disconnect", () => {
-    const symbols = clientSymbols.get(socket.id) || new Set();
-    for (const s of symbols) {
-      const subs = symbolSubscribers.get(s);
-      if (!subs) continue;
-      subs.delete(socket.id);
+  // Cleanup ao desconectar com delay para permitir reconexões
+  socket.on("disconnect", (reason) => {
+    const clientId = socket.id;
+    console.log(`📴 Cliente desconectado (${clientId}):`, reason);
 
-      if (subs.size === 0) unsubscribeSymbol(s, socket.id);
+    // Se for uma desconexão por reload/navegação, damos um tempo antes de limpar
+    if (reason === "transport close" || reason === "ping timeout") {
+      console.log(`⏳ Aguardando possível reconexão para ${clientId}...`);
+
+      setTimeout(() => {
+        // Se o cliente não reconectou, aí sim limpamos
+        const symbols = clientSymbols.get(clientId) || new Set();
+        if (symbols.size > 0) {
+          console.log(`🧹 Limpando subscrições de ${clientId} após timeout:`, [
+            ...symbols,
+          ]);
+
+          for (const s of symbols) {
+            const subs = symbolSubscribers.get(s);
+            if (!subs) continue;
+
+            subs.delete(clientId);
+            if (subs.size === 0) {
+              console.log(`❌ Removendo última subscrição de ${s}`);
+              unsubscribeSymbol(s, "1m", clientId);
+            }
+          }
+        }
+        clientSymbols.delete(clientId);
+      }, 5000); // 5 segundos de tolerância para reconexão
+    } else {
+      // Para outros tipos de desconexão, limpa imediatamente
+      const symbols = clientSymbols.get(clientId) || new Set();
+      for (const s of symbols) {
+        const subs = symbolSubscribers.get(s);
+        if (!subs) continue;
+        subs.delete(clientId);
+        if (subs.size === 0) unsubscribeSymbol(s, "1m", clientId);
+      }
+      clientSymbols.delete(clientId);
     }
-    clientSymbols.delete(socket.id);
   });
 });
 

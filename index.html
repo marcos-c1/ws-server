@@ -1,43 +1,47 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Document</title>
-    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-  </head>
-  <body></body>
 
-  <script>
-    // Conecte ao seu servidor (ajuste URL/porta/domínio/SSL)
-    const socket = //io("31.97.172.233:5555", {
-      io("localhost:8080", {
-        transports: ["websocket"],
-      });
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Document</title>
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
 
-    // Pedir um símbolo
-    function startSymbol(symbol, interval) {
-      socket.emit("watch", { symbol: symbol, interval: interval }); // ex: 'EUR/USD' ou 'BTC/USD'
-    }
+<body></body>
 
-    // Parar um símbolo
-    function stopSymbol(symbol, interval) {
-      socket.emit("unwatch", { symbol: symbol, interval: interval });
-    }
-
-    // Receber ticks
-    socket.on("tick", ({ symbol, payload }) => {
-      // Atualize seu gráfico/TradingView com os dados do 'payload'
-      // payload costuma conter preço/ts. Adapte o parser ao seu datasource.
-      console.log("Tick:", symbol, payload);
+<script>
+  // Conecte ao seu servidor (ajuste URL/porta/domínio/SSL)
+  const socket = //io("31.97.172.233:5555", {
+    io("localhost:8080", {
+      transports: ["websocket"],
     });
 
-    // Exemplo:
-    startSymbol("EUR/USD");
-    startSymbol("bnbusdt", "1m");
-    startSymbol("btcusdt", "1m");
-    startSymbol("ethusdt", "1m");
-    // depois...
-    // stopSymbol('EUR/USD');
-  </script>
+  // Pedir um símbolo
+  function startSymbol(symbol, interval) {
+    socket.emit("watch", { symbol: symbol, interval: interval }); // ex: 'EUR/USD' ou 'BTC/USD'
+  }
+
+  // Parar um símbolo
+  function stopSymbol(symbol, interval) {
+    socket.emit("unwatch", { symbol: symbol, interval: interval });
+  }
+
+  // Receber ticks
+  socket.on("tick", ({ symbol, payload }) => {
+    // Atualize seu gráfico/TradingView com os dados do 'payload'
+    // payload costuma conter preço/ts. Adapte o parser ao seu datasource.
+    console.log("Tick:", symbol, payload);
+  });
+
+  // Exemplo:
+  startSymbol("EUR/USD", "1m");
+  /*startSymbol("xrpusdt", "1m");
+  startSymbol("bnbusdt", "1m");
+  startSymbol("btcusdt", "1m");
+  startSymbol("ethusdt", "1m"); */
+  // depois...
+  // stopSymbol('EUR/USD');
+</script>
+
 </html>
